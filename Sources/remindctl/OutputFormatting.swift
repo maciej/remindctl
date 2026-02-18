@@ -51,7 +51,8 @@ enum OutputRenderer {
     switch format {
     case .standard:
       let due = reminder.dueDate.map { DateParsing.formatDisplay($0) } ?? "no due date"
-      Swift.print("✓ \(reminder.title) [\(reminder.listName)] — \(due)")
+      let listLabel = listLabel(for: reminder)
+      Swift.print("✓ \(reminder.title) [\(listLabel)] — \(due)")
     case .plain:
       Swift.print(plainLine(for: reminder))
     case .json:
@@ -98,7 +99,8 @@ enum OutputRenderer {
       let status = reminder.isCompleted ? "x" : " "
       let due = reminder.dueDate.map { DateParsing.formatDisplay($0) } ?? "no due date"
       let priority = reminder.priority == .none ? "" : " priority=\(reminder.priority.rawValue)"
-      Swift.print("[\(index + 1)] [\(status)] \(reminder.title) [\(reminder.listName)] — \(due)\(priority)")
+      let listLabel = listLabel(for: reminder)
+      Swift.print("[\(index + 1)] [\(status)] \(reminder.title) [\(listLabel)] — \(due)\(priority)")
     }
   }
 
@@ -114,6 +116,7 @@ enum OutputRenderer {
     return [
       reminder.id,
       reminder.listName,
+      reminder.sectionName ?? "",
       reminder.isCompleted ? "1" : "0",
       reminder.priority.rawValue,
       due,
@@ -150,6 +153,13 @@ enum OutputRenderer {
     } catch {
       Swift.print("Failed to encode JSON: \(error)")
     }
+  }
+
+  private static func listLabel(for reminder: ReminderItem) -> String {
+    if let section = reminder.sectionName {
+      return "\(reminder.listName)/\(section)"
+    }
+    return reminder.listName
   }
 
   private static func isoFormatter() -> ISO8601DateFormatter {
