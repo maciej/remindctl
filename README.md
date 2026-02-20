@@ -60,6 +60,7 @@ remindctl authorize             # request permissions
 - `--json` emits JSON arrays/objects.
 - `--plain` emits tab-separated lines.
 - `--quiet` emits counts only.
+- Section names are best-effort metadata from the local Reminders store; section ordering is not currently exposed.
 
 ## Date formats
 Accepted by `--due` and filters:
