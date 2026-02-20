@@ -4,16 +4,21 @@ import SQLite3
 /// Reads section data from the Reminders CoreData SQLite store.
 /// Degrades gracefully (returns empty map) when the database is unavailable.
 public enum SectionResolver {
+  private static let sqliteBusyTimeoutMs: Int32 = 1_500
 
   /// Builds a mapping of EventKit calendarItemIdentifier → section display name.
   /// Opens the database read-only; returns `[:]` on any failure.
   public static func resolve() -> [String: String] {
     guard let dbPath = findDatabase() else { return [:] }
+
     var db: OpaquePointer?
     guard sqlite3_open_v2(dbPath, &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX, nil) == SQLITE_OK else {
       return [:]
     }
     defer { sqlite3_close(db) }
+
+    // Reduce flaky failures while Reminders is concurrently writing WAL pages.
+    sqlite3_busy_timeout(db, sqliteBusyTimeoutMs)
 
     let sections = querySections(db: db!)
     if sections.isEmpty { return [:] }
@@ -37,17 +42,41 @@ public enum SectionResolver {
     let home = FileManager.default.homeDirectoryForCurrentUser.path
     let storesDir =
       "\(home)/Library/Group Containers/group.com.apple.reminders/Container_v1/Stores"
+    return newestReadableDataStore(in: storesDir)
+  }
 
-    guard let contents = try? FileManager.default.contentsOfDirectory(atPath: storesDir) else {
+  /// Returns the newest readable Reminders store, preferring `Data-*.sqlite` files.
+  static func newestReadableDataStore(in storesDir: String, fileManager: FileManager = .default) -> String? {
+    guard let contents = try? fileManager.contentsOfDirectory(atPath: storesDir) else {
       return nil
     }
-    for file in contents where file.hasSuffix(".sqlite") {
-      let path = "\(storesDir)/\(file)"
-      if FileManager.default.isReadableFile(atPath: path) {
-        return path
+
+    func pickNewest(from fileNames: [String]) -> String? {
+      var bestPath: String?
+      var bestModified = Date.distantPast
+
+      for file in fileNames {
+        let path = "\(storesDir)/\(file)"
+        guard fileManager.isReadableFile(atPath: path) else { continue }
+
+        let attributes = try? fileManager.attributesOfItem(atPath: path)
+        let modified = (attributes?[.modificationDate] as? Date) ?? .distantPast
+        if modified > bestModified {
+          bestModified = modified
+          bestPath = path
+        }
       }
+
+      return bestPath
     }
-    return nil
+
+    let remindersStores = contents.filter { $0.hasPrefix("Data-") && $0.hasSuffix(".sqlite") }
+    if let newestRemindersStore = pickNewest(from: remindersStores) {
+      return newestRemindersStore
+    }
+
+    let fallbackStores = contents.filter { $0.hasSuffix(".sqlite") }
+    return pickNewest(from: fallbackStores)
   }
 
   /// Section CK identifier → display name.
@@ -62,7 +91,10 @@ public enum SectionResolver {
       guard let ckRaw = sqlite3_column_text(stmt, 0),
         let nameRaw = sqlite3_column_text(stmt, 1)
       else { continue }
+
       let ck = String(cString: ckRaw)
+      guard ck.isEmpty == false else { continue }
+
       let name = String(cString: nameRaw)
       map[ck] = name
     }
@@ -85,8 +117,11 @@ public enum SectionResolver {
       guard let ckRaw = sqlite3_column_text(stmt, 0),
         let ekRaw = sqlite3_column_text(stmt, 1)
       else { continue }
+
       let ck = String(cString: ckRaw)
       let ek = String(cString: ekRaw)
+      guard ck.isEmpty == false, ek.isEmpty == false else { continue }
+
       map[ck] = ek
     }
     return map
@@ -118,9 +153,12 @@ public enum SectionResolver {
       let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
       let memberships = json["memberships"] as? [[String: Any]]
     else { return }
+
     for entry in memberships {
       guard let memberID = entry["memberID"] as? String,
-        let groupID = entry["groupID"] as? String
+        let groupID = entry["groupID"] as? String,
+        memberID.isEmpty == false,
+        groupID.isEmpty == false
       else { continue }
       map[memberID] = groupID
     }
